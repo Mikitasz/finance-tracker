@@ -133,6 +133,9 @@ func handleFinance(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(allCommitMessages, func(i, j int) bool {
 		return allCommitMessages[i].Time > allCommitMessages[j].Time
 	})
+	// Calculate the difference between Mikita's and Ania's current costs
+	mikitaSum, _ := getCurrentSum("Mikita.txt")
+	aniaSum, _ := getCurrentSum("Ania.txt")
 
 	// Retrieve commit history
 	//commitMessages, err := getCommitMessages(filePath)
@@ -161,27 +164,17 @@ func handleFinance(w http.ResponseWriter, r *http.Request) {
         <p>Track your finances by adding and subtracting costs with commit messages.</p>
 
         <form method="POST" action="/add-cost" class="finance-form">
-            <label for="commitMessage">Commit Message:</label>
+            <label for="commitMessage">За что:</label>
             <input type="text" id="commitMessage" name="commitMessage" placeholder="Enter commit message" required>
 
-            <label for="cost">Cost:</label>
+            <label for="cost">Сколько:</label>
             <input type="number" id="cost" name="cost" placeholder="Enter cost" required>
 
-            <label for="user">Choose User:</label>
+            <label for="user">Кто должен:</label>
             <select name="user" id="user" required>
                 <option value="Mikitasz">Mikita</option>
                 <option value="Ania">Ania</option>
             </select>
-
-            <fieldset class="action-options">
-                <legend>Action:</legend>
-                <label for="add">
-                    <input type="radio" id="add" name="action" value="add" required> Add
-                </label>
-                <label for="subtract">
-                    <input type="radio" id="subtract" name="action" value="subtract" required> Subtract
-                </label>
-            </fieldset>
 
             <button type="submit" class="submit-btn">Add Cost</button>
         </form>
@@ -194,6 +187,10 @@ func handleFinance(w http.ResponseWriter, r *http.Request) {
                 {{end}}
             </ul>
         </div>
+
+        <h2>Financial Summary</h2>
+        <p>Никита торчит: <strong>{{.Mikita}}</strong></p>
+        <p>Аня торчит: <strong>{{.Ania}}</strong></p>
     </main>
 </body>
 </html>`
@@ -201,9 +198,13 @@ func handleFinance(w http.ResponseWriter, r *http.Request) {
 	data := struct {
 		Username       string
 		CommitMessages []CommitMessage
+		Mikita         int
+		Ania           int
 	}{
 		Username:       username,
 		CommitMessages: allCommitMessages,
+		Mikita:         mikitaSum,
+		Ania:           aniaSum,
 	}
 
 	tmplExecute(w, tmpl, data)
@@ -284,7 +285,6 @@ func handleAddCost(w http.ResponseWriter, r *http.Request) {
 
 	commitMessage := r.FormValue("commitMessage")
 	costInput := r.FormValue("cost")
-	action := r.FormValue("action")
 	selectedUser := r.FormValue("user") // Get the selected user (either Mikitasz or Ania)
 	if selectedUser != "Mikitasz" && selectedUser != "Ania" {
 		http.Error(w, "Invalid user selected", http.StatusBadRequest)
@@ -297,59 +297,62 @@ func handleAddCost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Если выбран action "subtract", делаем стоимость отрицательной
-	if action == "subtract" {
-		costValue = -costValue
-	}
 	filePath := getFileForUser(selectedUser)
-	currentCost, err := getCurrentCostFromGitHub(filePath, username)
+	oppositeUser := "Mikitasz"
+	if selectedUser == "Mikitasz" {
+		oppositeUser = "Ania"
+	}
+	selectedCurrentCost, err := getCurrentCostFromGitHub(filePath, username)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to get current cost: %v", err), http.StatusInternalServerError)
 		return
 	}
-	// Изменяем Cost в зависимости от выбранного действия
-	newCost := currentCost + costValue
-	if newCost <= 0 {
-		// Считаем, сколько нужно перенести в противоположный файл
-		transferAmount := -newCost // Лишняя сумма, которую нужно перенести
-		oppositeUser := "Mikitasz"
-		if selectedUser == "Mikitasz" {
-			oppositeUser = "Ania"
+	filePath2 := getFileForUser(oppositeUser)
+	opositeCurrentCost, err := getCurrentCostFromGitHub(filePath2, username)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get current cost: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if opositeCurrentCost > 0 {
+		newCost := opositeCurrentCost - costValue
+		if newCost <= 0 {
+			// Считаем, сколько нужно перенести в противоположный файл
+			transferAmount := -newCost // Лишняя сумма, которую нужно перенести
+
+			newCost := selectedCurrentCost + transferAmount
+
+			// Создаем строку для противоположного пользователя с лишними деньгами
+			content := fmt.Sprintf("User: %s\nCost: %d\nMessage: %s\n\n", username, newCost, commitMessage)
+
+			// Коммитим отрицательную сумму в файл другого пользователя
+			if err := commitToGitHub(username, selectedUser, commitMessage, content); err != nil {
+				http.Error(w, fmt.Sprintf("Failed to commit to opposite file: %v", err), http.StatusInternalServerError)
+				return
+			}
+
+			content = fmt.Sprintf("User: %s\nCost: %d\nMessage: %s\n\n", username, 0, "update test")
+
+			// Коммитим отрицательную сумму в файл другого пользователя
+			if err := commitToGitHub(username, oppositeUser, commitMessage, content); err != nil {
+				http.Error(w, fmt.Sprintf("Failed to commit to opposite file: %v", err), http.StatusInternalServerError)
+				return
+			}
 		}
-		filePath := getFileForUser(oppositeUser)
-		currentCost, err := getCurrentCostFromGitHub(filePath, username)
-		newCost := currentCost + transferAmount
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to get current cost: %v", err), http.StatusInternalServerError)
-			return
-		}
+	}
+	if opositeCurrentCost == 0 {
+		newCost := selectedCurrentCost + costValue
 
 		// Создаем строку для противоположного пользователя с лишними деньгами
 		content := fmt.Sprintf("User: %s\nCost: %d\nMessage: %s\n\n", username, newCost, commitMessage)
 
 		// Коммитим отрицательную сумму в файл другого пользователя
-		if err := commitToGitHub(username, oppositeUser, commitMessage, content); err != nil {
+		if err := commitToGitHub(username, selectedUser, commitMessage, content); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to commit to opposite file: %v", err), http.StatusInternalServerError)
 			return
 		}
-	} else {
-		oppositeUser := "Mikitasz"
-		if selectedUser == "Mikitasz" {
-			oppositeUser = "Ania"
-		}
-		filePath := getFileForUser(oppositeUser)
-		currentCost, err := getCurrentCostFromGitHub(filePath, username)
-		newCost := currentCost + costValue
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to get current cost: %v", err), http.StatusInternalServerError)
-			return
-		}
-		// Коммитим положительную или обновленную сумму для текущего пользователя
-		content := fmt.Sprintf("User: %s\nCost: %d\nMessage: %s\n\n", username, newCost, commitMessage)
-		if err := commitToGitHub(username, selectedUser, commitMessage, content); err != nil {
-			http.Error(w, fmt.Sprintf("Failed to commit: %v", err), http.StatusInternalServerError)
-			return
-		}
+
 	}
+
 	// Пересчитываем разницу между файлами и отображаем её
 	mikitaSum, _ := getCurrentSum("Mikita.txt")
 	aniaSum, _ := getCurrentSum("Ania.txt")
