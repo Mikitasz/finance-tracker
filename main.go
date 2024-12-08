@@ -9,6 +9,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"sort"
 	"time"
 
 	"golang.org/x/net/context"
@@ -18,8 +19,8 @@ import (
 
 // OAuth configuration
 var oauth2Config = oauth2.Config{
-	ClientID:     "", // Replace with your GitHub Client ID
-	ClientSecret: "", // Replace with your GitHub Client Secret
+	ClientID:     "Ov23li8AWGo3ViCNChVm",                     // Replace with your GitHub Client ID
+	ClientSecret: "6f114c21e8faa5e05ab54976b95f0fa50dbe3d92", // Replace with your GitHub Client Secret
 	RedirectURL:  "http://localhost:8080/callback",
 	Scopes:       []string{"repo", "user"},
 	Endpoint:     github.Endpoint,
@@ -113,50 +114,94 @@ func handleFinance(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "You must be logged in to access this page", http.StatusForbidden)
 		return
 	}
-	filePath := getFileForUser(username)
+	//filePath := getFileForUser(username)
 
-	// Retrieve commit history
-	commitMessages, err := getCommitMessages(filePath)
+	mikitaCommitMessages, err := getCommitMessages("Mikita.txt")
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Error getting commit messages: %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Error getting Mikita commit messages: %v", err), http.StatusInternalServerError)
 		return
 	}
-	tmpl := `<html>
-	<head>
-		<title>Finance Tracker</title>
-		<link rel="stylesheet" href="/static/styles/style.css">
-	</head>
-	<body>
-		<div style="display: flex; justify-content: space-between; align-items: center;">
-			<h1>Finance Tracker</h1>
-			<div>
-				<img src="https://github.com/{{.Username}}.png" width="50" height="50" style="border-radius: 50%;">
-				<span>{{.Username}}</span>
-				<a href="/logout">Logout</a>
-			</div>
-		</div>
-		<form method="POST" action="/add-cost">
-			<label>Commit Message: <input type="text" name="commitMessage" required></label><br>
-			<label>Cost: <input type="number" name="cost" required></label><br>
-			<button type="submit">Add Cost</button>
-		</form>
-		<h2>Commit History</h2>
-		<div style="max-height: 300px; overflow-y: scroll;">
-			<ul>
-				{{range .CommitMessages}}
-					<li><strong>{{.User}}:</strong> ({{.Time}}): {{.Message}}</li>
-				{{end}}
-			</ul>
-		</div>
-	</body>
-	</html>`
+
+	aniaCommitMessages, err := getCommitMessages("Ania.txt")
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error getting Ania commit messages: %v", err), http.StatusInternalServerError)
+		return
+	}
+	allCommitMessages := append(mikitaCommitMessages, aniaCommitMessages...)
+	sort.Slice(allCommitMessages, func(i, j int) bool {
+		return allCommitMessages[i].Time > allCommitMessages[j].Time
+	})
+
+	// Retrieve commit history
+	//commitMessages, err := getCommitMessages(filePath)
+	//if err != nil {
+	//	http.Error(w, fmt.Sprintf("Error getting commit messages: %v", err), http.StatusInternalServerError)
+	//	return
+	//}
+	tmpl := `<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Finance Tracker</title>
+    <link rel="stylesheet" href="/static/styles/style.css">
+</head>
+<body>
+    <header class="header">
+        <div class="profile-info">
+            <img src="https://github.com/{{.Username}}.png" alt="GitHub Avatar" class="avatar">
+            <span>{{.Username}}</span>
+        </div>
+        <a href="/logout" class="logout-btn">Logout</a>
+    </header>
+
+    <main class="finance-container">
+        <h1>Finance Tracker</h1>
+        <p>Track your finances by adding and subtracting costs with commit messages.</p>
+
+        <form method="POST" action="/add-cost" class="finance-form">
+            <label for="commitMessage">Commit Message:</label>
+            <input type="text" id="commitMessage" name="commitMessage" placeholder="Enter commit message" required>
+
+            <label for="cost">Cost:</label>
+            <input type="number" id="cost" name="cost" placeholder="Enter cost" required>
+
+            <label for="user">Choose User:</label>
+            <select name="user" id="user" required>
+                <option value="Mikitasz">Mikita</option>
+                <option value="Ania">Ania</option>
+            </select>
+
+            <fieldset class="action-options">
+                <legend>Action:</legend>
+                <label for="add">
+                    <input type="radio" id="add" name="action" value="add" required> Add
+                </label>
+                <label for="subtract">
+                    <input type="radio" id="subtract" name="action" value="subtract" required> Subtract
+                </label>
+            </fieldset>
+
+            <button type="submit" class="submit-btn">Add Cost</button>
+        </form>
+
+        <h2>Commit History</h2>
+        <div class="commit-history">
+            <ul>
+                {{range .CommitMessages}}
+                    <li><strong>{{.User}}:</strong> ({{.Time}}): {{.Message}}</li>
+                {{end}}
+            </ul>
+        </div>
+    </main>
+</body>
+</html>`
 
 	data := struct {
 		Username       string
 		CommitMessages []CommitMessage
 	}{
 		Username:       username,
-		CommitMessages: commitMessages,
+		CommitMessages: allCommitMessages,
 	}
 
 	tmplExecute(w, tmpl, data)
@@ -215,6 +260,7 @@ func getPolishTime(t time.Time) string {
 	return warSawTime.Format("02.01.2006-15:04")
 }
 
+// Function to get user-specific file path
 type CommitMessage struct {
 	User    string
 	Message string
@@ -236,10 +282,14 @@ func handleAddCost(w http.ResponseWriter, r *http.Request) {
 
 	commitMessage := r.FormValue("commitMessage")
 	cost := r.FormValue("cost")
-
+	selectedUser := r.FormValue("user") // Get the selected user (either Mikitasz or Ania)
+	if selectedUser != "Mikitasz" && selectedUser != "Ania" {
+		http.Error(w, "Invalid user selected", http.StatusBadRequest)
+		return
+	}
 	content := fmt.Sprintf("User: %s\nCost: %s\nMessage: %s\n\n", username, cost, commitMessage)
 
-	if err := commitToGitHub(username, commitMessage, content); err != nil {
+	if err := commitToGitHub(username, selectedUser, commitMessage, content); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to commit: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -256,8 +306,8 @@ func getFileForUser(username string) string {
 }
 
 // Commit to GitHub
-func commitToGitHub(username, message, content string) error {
-	filePath := getFileForUser(username)
+func commitToGitHub(username, selectedUser, message, content string) error {
+	filePath := getFileForUser(selectedUser)
 	token, exists := userTokens[username]
 	if !exists {
 		return fmt.Errorf("user not logged in or token missing")
