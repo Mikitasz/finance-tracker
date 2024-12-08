@@ -32,10 +32,9 @@ var userTokens = make(map[string]*oauth2.Token)
 
 // GitHub repository details
 const (
-	githubUsername = "Mikitasz"     // Replace with your GitHub username
-	repoName       = "finance"      // Replace with your private repository name
-	filePath       = "finances.txt" // File to track finance updates
-	branchName     = "main"         // The branch where commits will be made
+	githubUsername = "Mikitasz" // Replace with your GitHub username
+	repoName       = "finance"  // Replace with your private repository name
+	branchName     = "main"     // The branch where commits will be made
 )
 
 func main() {
@@ -114,7 +113,14 @@ func handleFinance(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "You must be logged in to access this page", http.StatusForbidden)
 		return
 	}
+	filePath := getFileForUser(username)
 
+	// Retrieve commit history
+	commitMessages, err := getCommitMessages(filePath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error getting commit messages: %v", err), http.StatusInternalServerError)
+		return
+	}
 	tmpl := `<html>
 	<head>
 		<title>Finance Tracker</title>
@@ -134,16 +140,85 @@ func handleFinance(w http.ResponseWriter, r *http.Request) {
 			<label>Cost: <input type="number" name="cost" required></label><br>
 			<button type="submit">Add Cost</button>
 		</form>
+		<h2>Commit History</h2>
+		<div style="max-height: 300px; overflow-y: scroll;">
+			<ul>
+				{{range .CommitMessages}}
+					<li><strong>{{.User}}:</strong> ({{.Time}}): {{.Message}}</li>
+				{{end}}
+			</ul>
+		</div>
 	</body>
 	</html>`
 
 	data := struct {
-		Username string
+		Username       string
+		CommitMessages []CommitMessage
 	}{
-		Username: username,
+		Username:       username,
+		CommitMessages: commitMessages,
 	}
 
 	tmplExecute(w, tmpl, data)
+}
+
+// Retrieve commit messages from GitHub file
+func getCommitMessages(filePath string) ([]CommitMessage, error) {
+	var commitMessages []CommitMessage
+
+	token := userTokens["Mikitasz"] // Example, could be dynamic per user
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits?path=%s", githubUsername, repoName, filePath)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "token "+token.AccessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var commits []map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&commits); err != nil {
+		return nil, err
+	}
+
+	for _, commit := range commits {
+		commitMessage := commit["commit"].(map[string]interface{})["message"].(string)
+		author := commit["commit"].(map[string]interface{})["author"].(map[string]interface{})["name"].(string)
+		commitTime := commit["commit"].(map[string]interface{})["author"].(map[string]interface{})["date"].(string)
+		parsedTime, err := time.Parse(time.RFC3339, commitTime) // Parse the time
+		if err != nil {
+			return nil, err
+		}
+		commitMessages = append(commitMessages, CommitMessage{User: author, Message: commitMessage, Time: getPolishTime(parsedTime)})
+	}
+
+	return commitMessages, nil
+}
+func getPolishTime(t time.Time) string {
+	// Load the Europe/Warsaw time zone
+	loc, err := time.LoadLocation("Europe/Warsaw")
+	if err != nil {
+		log.Printf("Failed to load time zone: %v", err)
+		return t.Format("02.01.2006-15:04") // Fallback to default UTC if error occurs
+	}
+
+	// Convert the time to the Warsaw time zone
+	warSawTime := t.In(loc)
+
+	// Format the time in the Polish style (DD.MM.YYYY-HH:MM)
+	return warSawTime.Format("02.01.2006-15:04")
+}
+
+type CommitMessage struct {
+	User    string
+	Message string
+	Time    string
 }
 
 // Handle adding a cost and committing to GitHub
@@ -172,8 +247,17 @@ func handleAddCost(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/finance", http.StatusFound)
 }
 
+// Function to get user-specific file path
+func getFileForUser(username string) string {
+	if username == "Mikitasz" {
+		return "Mikita.txt"
+	}
+	return "Ania.txt"
+}
+
 // Commit to GitHub
 func commitToGitHub(username, message, content string) error {
+	filePath := getFileForUser(username)
 	token, exists := userTokens[username]
 	if !exists {
 		return fmt.Errorf("user not logged in or token missing")
