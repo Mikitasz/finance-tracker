@@ -10,6 +10,8 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/net/context"
@@ -281,20 +283,188 @@ func handleAddCost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	commitMessage := r.FormValue("commitMessage")
-	cost := r.FormValue("cost")
+	costInput := r.FormValue("cost")
+	action := r.FormValue("action")
 	selectedUser := r.FormValue("user") // Get the selected user (either Mikitasz or Ania)
 	if selectedUser != "Mikitasz" && selectedUser != "Ania" {
 		http.Error(w, "Invalid user selected", http.StatusBadRequest)
 		return
 	}
-	content := fmt.Sprintf("User: %s\nCost: %s\nMessage: %s\n\n", username, cost, commitMessage)
-
-	if err := commitToGitHub(username, selectedUser, commitMessage, content); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to commit: %v", err), http.StatusInternalServerError)
+	// Конвертируем введенную сумму в число
+	costValue, err := strconv.Atoi(costInput)
+	if err != nil {
+		http.Error(w, "Invalid cost value", http.StatusBadRequest)
 		return
 	}
+	// Если выбран action "subtract", делаем стоимость отрицательной
+	if action == "subtract" {
+		costValue = -costValue
+	}
+	filePath := getFileForUser(selectedUser)
+	currentCost, err := getCurrentCostFromGitHub(filePath, username)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get current cost: %v", err), http.StatusInternalServerError)
+		return
+	}
+	// Изменяем Cost в зависимости от выбранного действия
+	newCost := currentCost + costValue
+	if newCost <= 0 {
+		// Считаем, сколько нужно перенести в противоположный файл
+		transferAmount := -newCost // Лишняя сумма, которую нужно перенести
+		oppositeUser := "Mikitasz"
+		if selectedUser == "Mikitasz" {
+			oppositeUser = "Ania"
+		}
+		filePath := getFileForUser(oppositeUser)
+		currentCost, err := getCurrentCostFromGitHub(filePath, username)
+		newCost := currentCost + transferAmount
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to get current cost: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Создаем строку для противоположного пользователя с лишними деньгами
+		content := fmt.Sprintf("User: %s\nCost: %d\nMessage: %s\n\n", username, newCost, commitMessage)
+
+		// Коммитим отрицательную сумму в файл другого пользователя
+		if err := commitToGitHub(username, oppositeUser, commitMessage, content); err != nil {
+			http.Error(w, fmt.Sprintf("Failed to commit to opposite file: %v", err), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		oppositeUser := "Mikitasz"
+		if selectedUser == "Mikitasz" {
+			oppositeUser = "Ania"
+		}
+		filePath := getFileForUser(oppositeUser)
+		currentCost, err := getCurrentCostFromGitHub(filePath, username)
+		newCost := currentCost + costValue
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to get current cost: %v", err), http.StatusInternalServerError)
+			return
+		}
+		// Коммитим положительную или обновленную сумму для текущего пользователя
+		content := fmt.Sprintf("User: %s\nCost: %d\nMessage: %s\n\n", username, newCost, commitMessage)
+		if err := commitToGitHub(username, selectedUser, commitMessage, content); err != nil {
+			http.Error(w, fmt.Sprintf("Failed to commit: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+	// Пересчитываем разницу между файлами и отображаем её
+	mikitaSum, _ := getCurrentSum("Mikita.txt")
+	aniaSum, _ := getCurrentSum("Ania.txt")
+	var difference int
+	var userWithLess string
+	if mikitaSum < aniaSum {
+		difference = aniaSum - mikitaSum
+		userWithLess = "Mikita"
+	} else {
+		difference = mikitaSum - aniaSum
+		userWithLess = "Ania"
+	}
+
+	log.Printf("Difference between sums: %d (User with less: %s)", difference, userWithLess)
 
 	http.Redirect(w, r, "/finance", http.StatusFound)
+}
+
+// Функция для получения текущей суммы из файла
+func getCurrentSum(filePath string) (int, error) {
+	token := userTokens["Mikitasz"] // Предполагаем, что токен есть
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/contents/%s", githubUsername, repoName, filePath)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Authorization", "token "+token.AccessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return 0, nil // Если файла нет, сумма равна 0
+	}
+
+	var fileData map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&fileData); err != nil {
+		return 0, err
+	}
+
+	// Декодируем содержимое файла
+	decodedContent, err := base64.StdEncoding.DecodeString(fileData["content"].(string))
+	if err != nil {
+		return 0, err
+	}
+
+	// Парсим строки и суммируем значения Cost
+	lines := bytes.Split(decodedContent, []byte("\n"))
+	totalCost := 0
+	for _, line := range lines {
+		if bytes.HasPrefix(line, []byte("Cost:")) {
+			var cost int
+			_, err := fmt.Sscanf(string(line), "Cost: %d", &cost)
+			if err == nil {
+				totalCost += cost
+			}
+		}
+	}
+
+	return totalCost, nil
+}
+func getCurrentCostFromGitHub(filePath, username string) (int, error) {
+	token, exists := userTokens[username]
+	if !exists {
+		return 0, fmt.Errorf("user not logged in or token missing")
+	}
+
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/contents/%s", githubUsername, repoName, filePath)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Authorization", "token "+token.AccessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("failed to fetch file: %s", resp.Status)
+	}
+
+	var fileData map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&fileData); err != nil {
+		return 0, err
+	}
+
+	// Декодируем содержимое файла из base64
+	encodedContent := fileData["content"].(string)
+	decodedContent, err := base64.StdEncoding.DecodeString(encodedContent)
+	if err != nil {
+		return 0, err
+	}
+
+	// Ищем строку с текущим Cost
+	lines := strings.Split(string(decodedContent), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "Cost:") {
+			costStr := strings.TrimSpace(strings.TrimPrefix(line, "Cost:"))
+			cost, err := strconv.Atoi(costStr)
+			if err != nil {
+				return 0, err
+			}
+			return cost, nil
+		}
+	}
+
+	return 0, fmt.Errorf("cost not found in file")
 }
 
 // Function to get user-specific file path
