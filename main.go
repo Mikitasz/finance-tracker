@@ -84,7 +84,7 @@ func handleMain(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Access Denied", http.StatusForbidden)
 		return
 	}
-	http.ServeFile(w, r, "index.html")
+	http.ServeFile(w, r, "public/index.html")
 }
 
 // Handle login, redirect to GitHub for OAuth authentication
