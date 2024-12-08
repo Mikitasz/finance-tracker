@@ -20,24 +20,6 @@ import (
 )
 
 // Список разрешенных IP-адресов
-var allowedIPs = map[string]bool{
-	"46.205.202.217": true, // Пример разрешенного IP
-	// Добавьте сюда другие разрешенные IP-адреса
-}
-
-func isAllowedIP(r *http.Request) bool {
-	// Получаем IP-адрес клиента
-	ip := r.RemoteAddr
-
-	// Если сервер за прокси, используем заголовок X-Forwarded-For
-	if forwardedFor := r.Header.Get("X-Forwarded-For"); forwardedFor != "" {
-		// Преобразуем список адресов в строку и берем первый (например, первый IP в списке)
-		ip = strings.Split(forwardedFor, ",")[0]
-	}
-
-	// Проверяем, разрешен ли этот IP
-	return allowedIPs[ip]
-}
 
 // OAuth configuration
 var oauth2Config = oauth2.Config{
@@ -80,29 +62,20 @@ func main() {
 
 // Handle the main login page
 func handleMain(w http.ResponseWriter, r *http.Request) {
-	if !isAllowedIP(r) {
-		http.Error(w, "Access Denied", http.StatusForbidden)
-		return
-	}
+
 	http.ServeFile(w, r, "public/index.html")
 }
 
 // Handle login, redirect to GitHub for OAuth authentication
 func handleLogin(w http.ResponseWriter, r *http.Request) {
-	if !isAllowedIP(r) {
-		http.Error(w, "Access Denied", http.StatusForbidden)
-		return
-	}
+
 	url := oauth2Config.AuthCodeURL(oauth2StateString, oauth2.AccessTypeOffline)
 	http.Redirect(w, r, url, http.StatusFound)
 }
 
 // Handle the callback from GitHub after user login
 func handleCallback(w http.ResponseWriter, r *http.Request) {
-	if !isAllowedIP(r) {
-		http.Error(w, "Access Denied", http.StatusForbidden)
-		return
-	}
+
 	if r.FormValue("state") != oauth2StateString {
 		http.Error(w, "Invalid OAuth state", http.StatusBadRequest)
 		return
@@ -143,10 +116,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 
 // Handle the finance page
 func handleFinance(w http.ResponseWriter, r *http.Request) {
-	if !isAllowedIP(r) {
-		http.Error(w, "Access Denied", http.StatusForbidden)
-		return
-	}
+
 	username := getLoggedInUser(r)
 	if username == "" {
 		http.Error(w, "You must be logged in to access this page", http.StatusForbidden)
@@ -308,10 +278,7 @@ type CommitMessage struct {
 
 // Handle adding a cost and committing to GitHub
 func handleAddCost(w http.ResponseWriter, r *http.Request) {
-	if !isAllowedIP(r) {
-		http.Error(w, "Access Denied", http.StatusForbidden)
-		return
-	}
+
 	username := getLoggedInUser(r)
 	if username == "" {
 		http.Error(w, "You must be logged in to commit", http.StatusForbidden)
