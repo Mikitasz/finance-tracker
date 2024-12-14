@@ -44,7 +44,7 @@ const (
 
 func main() {
 	// Handle static files (CSS, images, etc.)
-	fs := http.FileServer(http.Dir("public"))
+	fs := http.FileServer(http.Dir("docs"))
 	http.Handle("/static/", http.StripPrefix("/static/", fs))
 
 	http.HandleFunc("/", handleMain)
@@ -63,7 +63,7 @@ func main() {
 // Handle the main login page
 func handleMain(w http.ResponseWriter, r *http.Request) {
 
-	http.ServeFile(w, r, "public/index.html")
+	http.ServeFile(w, r, "docs/index.html")
 }
 
 // Handle login, redirect to GitHub for OAuth authentication
@@ -143,12 +143,6 @@ func handleFinance(w http.ResponseWriter, r *http.Request) {
 	mikitaSum, _ := getCurrentSum("Mikita.txt")
 	aniaSum, _ := getCurrentSum("Ania.txt")
 
-	// Retrieve commit history
-	//commitMessages, err := getCommitMessages(filePath)
-	//if err != nil {
-	//	http.Error(w, fmt.Sprintf("Error getting commit messages: %v", err), http.StatusInternalServerError)
-	//	return
-	//}
 	tmpl := `<html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -338,6 +332,16 @@ func handleAddCost(w http.ResponseWriter, r *http.Request) {
 			}
 
 			content = fmt.Sprintf("User: %s\nCost: %d\nMessage: %s\n\n", username, 0, "update test")
+
+			// Коммитим отрицательную сумму в файл другого пользователя
+			if err := commitToGitHub(username, oppositeUser, commitMessage, content); err != nil {
+				http.Error(w, fmt.Sprintf("Failed to commit to opposite file: %v", err), http.StatusInternalServerError)
+				return
+			}
+		}
+		if newCost > 0 {
+
+			content := fmt.Sprintf("User: %s\nCost: %d\nMessage: %s\n\n", username, newCost, commitMessage)
 
 			// Коммитим отрицательную сумму в файл другого пользователя
 			if err := commitToGitHub(username, oppositeUser, commitMessage, content); err != nil {
