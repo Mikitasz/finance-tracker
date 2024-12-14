@@ -44,7 +44,7 @@ const (
 
 func main() {
 	// Handle static files (CSS, images, etc.)
-	fs := http.FileServer(http.Dir("docs"))
+	fs := http.FileServer(http.Dir("public"))
 	http.Handle("/static/", http.StripPrefix("/static/", fs))
 
 	http.HandleFunc("/", handleMain)
@@ -63,7 +63,7 @@ func main() {
 // Handle the main login page
 func handleMain(w http.ResponseWriter, r *http.Request) {
 
-	http.ServeFile(w, r, "docs/index.html")
+	http.ServeFile(w, r, "public/index.html")
 }
 
 // Handle login, redirect to GitHub for OAuth authentication
